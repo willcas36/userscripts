@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tatoeba - Flashcards (Sentence Mining)
 // @namespace    https://tatoeba.org/
-// @version      4.84
+// @version      4.85
 // @description  Flashcards tipo Anki sobre la búsqueda filtrada de Tatoeba (mobile + teclado)
 // @icon         https://tatoeba.org/img/tatoeba.svg?1781334885
 // @match        https://tatoeba.org/*/sentences/search*
@@ -17,7 +17,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '4.84';
+  const SCRIPT_VERSION = '4.85';
 
   /* ============ STORAGE (backend local: GM_setValue, con fallback a localStorage) ============ */
   // Acá NO hay sync entre dispositivos: esto es solo el guardado LOCAL. El sync cruzado lo hace el Gist (más abajo).
@@ -324,8 +324,6 @@
       return Object.assign({}, FETCH_DEFAULTS);
     }
   })();
-  // Toda persistencia de config va al PERFIL ACTIVO (fuente única). saveActive() lo escribe (y dispara el sync).
-  const saveFilters = () => saveActive();
 
   let DISPLAY = (() => {
     try {
@@ -338,7 +336,6 @@
       return Object.assign({}, DISPLAY_DEFAULT);
     }
   })();
-  const saveDisplay = () => saveActive();
 
   let LIST_DISPLAY = (() => {
     try {
@@ -688,10 +685,6 @@
       #fc-id .fc-prof { color:var(--fg); font-weight:700; font-size:13px; margin-bottom:2px; }
       #fc-id .fc-dirty { color:#e0a000; font-weight:600; font-size:11px; }
       #fc-id .fc-total { color:var(--accent); font-weight:700; margin-bottom:2px; }
-      .fc-dot-load { display:inline-flex; gap:3px; vertical-align:middle; }
-      .fc-dot-load i { width:4px; height:4px; border-radius:50%; background:currentColor; opacity:.4; animation:fc-bounce 1s ease-in-out infinite; }
-      .fc-dot-load i:nth-child(2) { animation-delay:.16s; }
-      .fc-dot-load i:nth-child(3) { animation-delay:.32s; }
       .fc-spin { width:22px; height:22px; border:2.5px solid currentColor; border-top-color:transparent; border-radius:50%; opacity:.7; animation:fc-spin-rot .7s linear infinite; }
       @keyframes fc-spin-rot { to { transform:rotate(360deg); } }
       #fc-top .spacer { flex:1; }
@@ -1160,17 +1153,6 @@
     setAudioIcon('play_arrow'); // carta nueva -> ícono de reproducir
     syncHistory(); // historial sigue en vivo a la oración actual
     if (START_REVEALED) reveal(); // modo "ya revelada": mostrá el reverso de entrada
-  }
-
-  // FLIP horizontal de la línea de dueños: animar su corrimiento desde 'fromLeft' hasta su lugar actual.
-  function flipOwners(fromLeft) {
-    const dx = fromLeft - ownersEl.getBoundingClientRect().left;
-    if (!dx) return;
-    ownersEl.style.transition = 'none';
-    ownersEl.style.transform = `translateX(${dx}px)`;
-    void ownersEl.offsetWidth; // reflow forzado: fija el estado inicial antes de animar
-    ownersEl.style.transition = 'transform .28s ease';
-    ownersEl.style.transform = 'translateX(0)';
   }
 
   function reveal() {
