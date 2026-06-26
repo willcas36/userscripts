@@ -74,7 +74,8 @@
       if (typeof GM_xmlhttpRequest !== 'function')
         return reject(new Error('sin GM_xmlhttpRequest'));
       let url = 'https://api.github.com' + path;
-      if (method === 'GET') url += (path.includes('?') ? '&' : '?') + '_=' + Date.now(); // cache-bust: GitHub sirve el gist cacheado tras un PATCH
+      if (method === 'GET')
+        url += (path.includes('?') ? '&' : '?') + '_=' + Date.now(); // cache-bust: GitHub sirve el gist cacheado tras un PATCH
       GM_xmlhttpRequest({
         method,
         url,
@@ -1845,7 +1846,9 @@
     setC('#f-startrev', START_REVEALED);
     setC('#f-desktop', DESKTOP_MODE);
     populateListSelect(); // re-puebla "Lista objetivo" y selecciona el LIST_ID actual
-    ['up', 'down', 'left', 'right'].forEach((d) => setV('#g-' + d, GESTURES[d]));
+    ['up', 'down', 'left', 'right'].forEach((d) =>
+      setV('#g-' + d, GESTURES[d]),
+    );
     m.querySelectorAll('.fc-keycap').forEach((b) => {
       const k = KEYS[b.dataset.act] || '';
       b.dataset.key = k;
@@ -1862,7 +1865,11 @@
     cfg = cfg || {};
     filters = Object.assign({}, FETCH_DEFAULTS, cfg.filters || {});
     DISPLAY = Object.assign({}, DISPLAY_DEFAULT, cfg.display || {});
-    LIST_DISPLAY = Object.assign({}, LIST_DISPLAY_DEFAULT, cfg.listDisplay || {});
+    LIST_DISPLAY = Object.assign(
+      {},
+      LIST_DISPLAY_DEFAULT,
+      cfg.listDisplay || {},
+    );
     LIST_ID = cfg.listId || '174916';
     AUDIO_LANG = cfg.audioLang || 'eng';
     listSort = cfg.listSort || '-created';
@@ -1921,7 +1928,8 @@
   // Habilita/inhabilita visualmente el botón Restaurar según si el form difiere de los defaults.
   function updateRestoreBtn(m) {
     const btn = m.querySelector('#prof-restore');
-    if (btn) btn.classList.toggle('fc-disabled', isDefaultCfg(snapshotFromModal(m)));
+    if (btn)
+      btn.classList.toggle('fc-disabled', isDefaultCfg(snapshotFromModal(m)));
   }
   function ensureDefaultProfile() {
     const profs = loadProfiles();
@@ -2003,7 +2011,8 @@
         `<option value="${val}" ${v === val ? 'selected' : ''}>${t}</option>`;
       return `<select id="${id}">${o('', 'Cualquiera')}${o('original', 'Original')}${o('translation', 'Traducción')}${o('known', 'Conocido')}${o('unknown', 'Desconocido')}</select>`;
     };
-    const atDefaults = JSON.stringify(snapshotFromGlobals()) === JSON.stringify(DEFAULT_CONFIG); // ¿el perfil ya está en los predeterminados?
+    const atDefaults =
+      JSON.stringify(snapshotFromGlobals()) === JSON.stringify(DEFAULT_CONFIG); // ¿el perfil ya está en los predeterminados?
     m.innerHTML = `<div class="box">
       <div class="fc-profiles">
         <div class="fc-prof-row">
@@ -2210,7 +2219,13 @@
           toast('Sin cambios — ya estás en los predeterminados', true);
           return;
         }
-        if (!(await confirmDialog('¿Restaurar la config de fábrica del perfil Predeterminado?', 'Restaurar'))) return;
+        if (
+          !(await confirmDialog(
+            '¿Restaurar la config de fábrica del perfil Predeterminado?',
+            'Restaurar',
+          ))
+        )
+          return;
         applyConfig(DEFAULT_CONFIG); // carga defaults a globals (no toca el modo ordenador, que es local)
         setActiveProfile(PROFILE_DEFAULT);
         saveActive(); // guarda los defaults en Predeterminado (+ sincroniza)
@@ -2283,7 +2298,10 @@
     });
     m.querySelector('#gh-sync').addEventListener('click', async () => {
       if (!ghToken()) {
-        toast('Falta el token de GitHub (variable GH_TOKEN en el script)', false);
+        toast(
+          'Falta el token de GitHub (variable GH_TOKEN en el script)',
+          false,
+        );
         return;
       }
       toast('Sincronizando…', true);
