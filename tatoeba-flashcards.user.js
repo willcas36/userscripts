@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tatoeba - Flashcards (Sentence Mining)
 // @namespace    https://tatoeba.org/
-// @version      4.83
+// @version      4.84
 // @description  Flashcards tipo Anki sobre la búsqueda filtrada de Tatoeba (mobile + teclado)
 // @icon         https://tatoeba.org/img/tatoeba.svg?1781334885
 // @match        https://tatoeba.org/*/sentences/search*
@@ -17,8 +17,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '4.83';
-  const GH_TOKEN = '';
+  const SCRIPT_VERSION = '4.84';
 
   /* ============ STORAGE (backend local: GM_setValue, con fallback a localStorage) ============ */
   // Acá NO hay sync entre dispositivos: esto es solo el guardado LOCAL. El sync cruzado lo hace el Gist (más abajo).
@@ -66,7 +65,7 @@
   })();
   /* ============ AUTO-SYNC (GitHub Gist privado) ============ */
   const SYNC_FILE = 'tatoeba-flashcards-config.json';
-  const ghToken = () => GH_TOKEN || LS.get('sm-fc-gh-token') || ''; // prioridad: token del script -> token guardado por UI
+  const ghToken = () => LS.get('sm-fc-gh-token') || ''; // token guardado por la UI, local a cada dispositivo (nunca en el repo público)
   let suppressPush = false,
     pushTimer = null;
   function ghReq(method, path, body) {
