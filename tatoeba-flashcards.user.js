@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tatoeba - Flashcards (Sentence Mining)
 // @namespace    https://tatoeba.org/
-// @version      4.82
+// @version      4.83
 // @description  Flashcards tipo Anki sobre la búsqueda filtrada de Tatoeba (mobile + teclado)
 // @icon         https://tatoeba.org/img/tatoeba.svg?1781334885
 // @match        https://tatoeba.org/*/sentences/search*
@@ -17,7 +17,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '4.82';
+  const SCRIPT_VERSION = '4.83';
   const GH_TOKEN = '';
 
   /* ============ STORAGE (backend local: GM_setValue, con fallback a localStorage) ============ */
@@ -2298,11 +2298,17 @@
     });
     m.querySelector('#gh-sync').addEventListener('click', async () => {
       if (!ghToken()) {
-        toast(
-          'Falta el token de GitHub (variable GH_TOKEN en el script)',
-          false,
+        // Sin token: pedilo con el prompt temático y guardalo SOLO en este dispositivo (no se sube al gist).
+        const tok = await promptDialog(
+          'Pegá tu GitHub token (se guarda solo en este dispositivo)',
+          'ghp_… o github_pat_…',
+          '',
         );
-        return;
+        if (!tok) {
+          toast('Sync cancelado — falta el token', false);
+          return;
+        }
+        LS.set('sm-fc-gh-token', tok); // clave local-only: no está en SYNC_KEYS
       }
       toast('Sincronizando…', true);
       try {
