@@ -1,34 +1,54 @@
 #!/usr/bin/env bash
-# Publish the Tatoeba flashcards userscript so Tampermonkey auto-updates every device.
-# Single source of truth: this repo. Edit the .user.js here, bump @version, then run ./publish.sh
+# Publish one userscript from the monorepo so Tampermonkey auto-updates every device.
+# Usage: ./publish.sh <script-folder>     e.g. ./publish.sh tatoeba-flashcards
+# Single source of truth: this repo. Edit the .user.js, bump its @version, then publish.
 set -euo pipefail
 
-# Resolve the repo dir from this script's location (works wherever the repo lives).
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FILE="$DIR/tatoeba-flashcards.user.js"
 
-[ -f "$FILE" ] || { echo "Script not found: $FILE"; exit 1; }
+list_scripts() {
+  echo "Available scripts:"
+  for d in "$DIR"/*/; do
+    name="$(basename "$d")"
+    [ -f "$d/$name.user.js" ] && echo "  - $name"
+  done
+}
+
+NAME="${1:-}"
+if [ -z "$NAME" ]; then
+  echo "Which script? Pass a folder name."
+  list_scripts
+  exit 1
+fi
+
+FILE="$DIR/$NAME/$NAME.user.js"
+if [ ! -f "$FILE" ]; then
+  echo "Not found: $FILE"
+  list_scripts
+  exit 1
+fi
 
 # Push as the personal account (two gh accounts live on this machine).
 if command -v gh >/dev/null 2>&1; then
   gh auth switch -u willcas36 -h github.com >/dev/null 2>&1 || true
 fi
 
-# Syntax gate before publishing anything broken.
+# Syntax gate.
 node --check "$FILE"
 
-# Read the version from the header for the commit message.
-VER=$(grep -m1 -E '^// @version' "$FILE" | awk '{print $3}')
+# Version from the header for the commit message.
+VER=$(grep -m1 -E '^// @version' "$FILE" | awk '{print $NF}')
 
 cd "$DIR"
+git add "$NAME"
 
-if git diff --quiet && git diff --cached --quiet; then
-  echo "No changes to publish (working tree is clean)."
+if git diff --cached --quiet; then
+  echo "No changes to publish in '$NAME' (already up to date)."
   exit 0
 fi
 
-git add -A
-git commit -q -m "release: v${VER}"
+git commit -q -m "release($NAME): v${VER}"
 git push -q origin main
-echo "Published v${VER} -> https://github.com/willcas36/tatoeba-flashcards"
-echo "Tampermonkey picks it up on its next update check (devices already installed from the raw URL)."
+echo "Published $NAME v${VER}"
+echo "  -> https://raw.githubusercontent.com/willcas36/userscripts/main/$NAME/$NAME.user.js"
+echo "Tampermonkey picks it up on its next update check (devices installed from the raw URL)."
