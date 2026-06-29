@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tatoeba - Flashcards (Sentence Mining)
 // @namespace    https://tatoeba.org/
-// @version      5.08
+// @version      5.09
 // @description  Flashcards tipo Anki sobre la búsqueda filtrada de Tatoeba (mobile + teclado)
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=tatoeba.org
 // @match        https://tatoeba.org/*/sentences/search*
@@ -17,7 +17,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '5.08';
+  const SCRIPT_VERSION = '5.09';
 
   /* ============ STORAGE (backend local: GM_setValue, con fallback a localStorage) ============ */
   // Acá NO hay sync entre dispositivos: esto es solo el guardado LOCAL. El sync cruzado lo hace el Gist (más abajo).
@@ -1770,11 +1770,13 @@
       // secuencial: más suave con el servidor que disparar N a la vez
       if (await listAction('remove_sentence_from_list', row.dataset.sid)) {
         ok++;
-        cacheRemove(LIST_ID, row.dataset.sid, true); // skipPush: evita la ráfaga de pushes (causaba el 403)
+        cacheRemove(LIST_ID, row.dataset.sid, true); // skipPush: el push lo controlamos por tandas acá
         row.remove();
+        // Checkpoint cada 25: sube el progreso parcial (a prueba de cortes). Va por la cola throttled -> sin 403.
+        if (ok % 25 === 0) flushCachePush([LIST_ID]).catch(() => {});
       }
     }
-    if (ok) gistPushCacheDebounced(LIST_ID); // UN solo push al final con el estado ya borrado
+    if (ok) gistPushCacheDebounced(LIST_ID); // push final con el estado completo (el resto < 25)
     if (listTotal != null && ok) {
       listTotal = Math.max(0, listTotal - ok);
       applyListTitle();
