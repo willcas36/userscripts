@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tatoeba - Flashcards (Sentence Mining)
 // @namespace    https://tatoeba.org/
-// @version      4.90
+// @version      4.95
 // @description  Flashcards tipo Anki sobre la búsqueda filtrada de Tatoeba (mobile + teclado)
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=tatoeba.org
 // @match        https://tatoeba.org/*/sentences/search*
@@ -17,7 +17,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '4.90';
+  const SCRIPT_VERSION = '4.95';
 
   /* ============ STORAGE (backend local: GM_setValue, con fallback a localStorage) ============ */
   // Acá NO hay sync entre dispositivos: esto es solo el guardado LOCAL. El sync cruzado lo hace el Gist (más abajo).
@@ -49,6 +49,7 @@
     'sm-fc-dark', // modo oscuro (preferencia global sincronizada)
     'sm-fc-keys', // atajos de teclado (global)
     'sm-fc-gestures', // gestos mobile (global)
+    'sm-fc-desktop-auto', // toggle "Auto" del modo ordenador (global, sincronizado; el modo manual NO se sincroniza)
   ];
   // Migración única: pasa la config que estaba en localStorage al storage GM (el backend local del script).
   (function migrateStorage() {
@@ -171,6 +172,132 @@
     }, 1500);
   }
 
+  /* ===== Caché de "Agregadas recientemente" (sincronizado por gist, UN ARCHIVO POR LISTA) =====
+     La API de Tatoeba no expone cuándo agregaste una oración a TU lista, así que lo
+     registramos nosotros al agregar por la app. Cada entrada tiene la forma de un objeto
+     de la API (id/lang/text/owner/translations) + ts, así el render reusa buildListRow.
+     Local: un solo blob {listId:{sid:entry}}. Gist: un archivo por lista (push más chico,
+     y el límite de 1MB de GitHub aplica por archivo, no al total entre listas). */
+  const OLD_SYNC_FILE_CACHE = 'tatoeba-flashcards-listcache.json'; // formato viejo (un solo archivo) -> se migra al leer
+  const LIST_CACHE_KEY = 'sm-fc-listcache';
+  const cacheFileName = (lid) => `tatoeba-flashcards-list-${lid}.json`;
+  const CACHE_FILE_RE = /^tatoeba-flashcards-list-(.+)\.json$/;
+  let cachePushTimer = null;
+  const cacheDirtyLists = new Set();
+
+  function loadListCache() {
+    try {
+      return JSON.parse(LS.get(LIST_CACHE_KEY) || '{}') || {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function saveListCache(obj) {
+    LS.set(LIST_CACHE_KEY, JSON.stringify(obj)); // local-only: no está en SYNC_KEYS -> no auto-push de config
+  }
+  // Fusiona un mapa {sid:entry} dentro del caché local de una lista (unión; gana el ts más nuevo).
+  function mergeListInto(merged, lid, remote) {
+    const into = (merged[lid] = merged[lid] || {});
+    for (const sid of Object.keys(remote || {})) {
+      const a = into[sid],
+        b = remote[sid];
+      if (!a || (b && (b.ts || 0) > (a.ts || 0))) into[sid] = b;
+    }
+  }
+  function cacheAdd(listId, c) {
+    const cache = loadListCache();
+    const byId = (cache[listId] = cache[listId] || {});
+    byId[String(c.id)] = {
+      ts: Date.now(),
+      id: c.id,
+      lang: c.lang,
+      text: c.text,
+      owner: c.owner,
+      translations: (c.translations || []).map((t) => ({
+        lang: t.lang,
+        text: t.text,
+        id: t.id,
+        owner: t.owner,
+      })),
+    };
+    saveListCache(cache);
+    gistPushCacheDebounced(listId);
+  }
+  function cacheRemove(listId, id) {
+    const cache = loadListCache();
+    if (cache[listId] && cache[listId][String(id)]) {
+      delete cache[listId][String(id)];
+      saveListCache(cache);
+      gistPushCacheDebounced(listId);
+    }
+  }
+  // Sube SOLO los archivos de las listas que cambiaron (un archivo por lista).
+  async function flushCachePush(listIds) {
+    if (!ghToken() || !listIds.length) return;
+    const id = await gistFindId();
+    if (!id) return; // el gist lo crea el archivo de config; el caché se suma si ya existe
+    const cache = loadListCache();
+    const files = {};
+    for (const lid of listIds) {
+      files[cacheFileName(lid)] = {
+        content: JSON.stringify({
+          updated: Date.now(),
+          listId: lid,
+          cache: cache[lid] || {},
+        }),
+      };
+    }
+    await ghReq('PATCH', '/gists/' + id, { files });
+  }
+  function gistPushCacheDebounced(listId) {
+    if (!ghToken()) return;
+    cacheDirtyLists.add(String(listId));
+    clearTimeout(cachePushTimer);
+    cachePushTimer = setTimeout(() => {
+      const lists = [...cacheDirtyLists];
+      cacheDirtyLists.clear();
+      flushCachePush(lists).catch(() => {}); // best-effort: el local ya quedó bien; el próximo pull reconcilia
+    }, 1500);
+  }
+  // Empuja todas las listas locales (lo usa el botón Sync manual).
+  function gistPushCacheAll() {
+    return flushCachePush(Object.keys(loadListCache()));
+  }
+  // Trae TODOS los archivos de caché del gist (un solo GET) y los fusiona con el local.
+  async function gistPullCache() {
+    if (!ghToken()) return;
+    const id = await gistFindId();
+    if (!id) return;
+    const g = await ghReq('GET', '/gists/' + id);
+    const files = g.files || {};
+    const merged = loadListCache();
+    // Migración: si quedó el archivo viejo combinado, fusionalo (formato {listId:{sid:entry}}).
+    const oldFile = files[OLD_SYNC_FILE_CACHE];
+    if (oldFile && oldFile.content) {
+      try {
+        const oldCache = (JSON.parse(oldFile.content) || {}).cache || {};
+        for (const lid of Object.keys(oldCache))
+          mergeListInto(merged, lid, oldCache[lid]);
+      } catch (e) {
+        /* archivo viejo corrupto: ignorar */
+      }
+    }
+    // Formato nuevo: un archivo por lista.
+    for (const fname of Object.keys(files)) {
+      const m = fname.match(CACHE_FILE_RE);
+      if (!m) continue;
+      const f = files[fname];
+      if (!f || !f.content) continue;
+      try {
+        const payload = JSON.parse(f.content) || {};
+        mergeListInto(merged, payload.listId || m[1], payload.cache || {});
+      } catch (e) {
+        /* archivo corrupto: seguir con los demás */
+      }
+    }
+    saveListCache(merged);
+  }
+
   /* ============ CONFIGURACIÓN ============ */
   let LIST_ID = LS.get('sm-fc-listid') || '174916'; // lista objetivo (editable en el modal)
 
@@ -268,7 +395,14 @@
   const PREFETCH_AT = 4;
   const DARK_DEFAULT = false;
   let AUDIO_LANG = LS.get('sm-fc-audiolang') || 'eng'; // idioma del audio (editable en el modal)
-  let DESKTOP_MODE = LS.get('sm-fc-desktop') === '1'; // PC: paneles laterales que empujan + atajos [ ]
+  // Modo ordenador. "Auto" (global + sincronizado) detecta pantalla chica/móvil; si está OFF,
+  // manda el modo MANUAL (local por dispositivo, no sincronizado). DESKTOP_MODE es el efectivo.
+  const smallScreenMQ = window.matchMedia('(max-width: 820px)');
+  const detectDesktop = () => !smallScreenMQ.matches; // pantalla grande -> modo ordenador
+  let DESKTOP_AUTO = LS.get('sm-fc-desktop-auto') !== '0'; // default: ON
+  const effectiveDesktop = () =>
+    DESKTOP_AUTO ? detectDesktop() : LS.get('sm-fc-desktop') === '1';
+  let DESKTOP_MODE = effectiveDesktop(); // PC: paneles laterales que empujan + atajos [ ]
   let START_REVEALED = LS.get('sm-fc-startrevealed') === '1'; // al navegar, mostrar la carta ya revelada (default: oculta)
   const PROFILE_DEFAULT = 'Predeterminado'; // perfil base, no se puede borrar
   let activeProfile = LS.get('sm-fc-active') || PROFILE_DEFAULT;
@@ -674,7 +808,10 @@
     if (!c) return;
     toastLoading('Agregando oración');
     listById('add_sentence_to_list', c.id, 'agregada').then((ok) => {
-      if (ok) syncListAdd(c);
+      if (ok) {
+        cacheAdd(LIST_ID, c); // solo si el agregado OFICIAL fue OK -> nunca divergen
+        syncListAdd(c);
+      }
     });
   };
   const removeCurrent = () => {
@@ -682,7 +819,10 @@
     if (!c) return;
     toastLoading('Quitando oración');
     listById('remove_sentence_from_list', c.id, 'quitada').then((ok) => {
-      if (ok) listRemoveRow(c.id);
+      if (ok) {
+        cacheRemove(LIST_ID, c.id);
+        listRemoveRow(c.id);
+      }
     });
   };
 
@@ -850,6 +990,8 @@
       #fc-modal .fc-keycap.empty { color:var(--muted); font-weight:400; font-style:italic; }
       #fc-modal .fc-restore { width:100%; height:34px; margin-top:4px; border:1px solid var(--line); border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; background:transparent; color:var(--muted); }
       #fc-modal .fc-restore:hover { color:var(--fg); border-color:var(--accent); }
+      #fc-modal .fc-sub { margin-left:14px; padding-left:12px; border-left:2px solid var(--line); display:flex; flex-direction:column; gap:6px; transition:opacity .2s ease; }
+      #fc-modal .fc-sub.dim { opacity:.4; } /* Auto ON -> el manual queda inactivo */
       #fc-modal .fc-tabs { display:flex; gap:2px; padding:8px 8px 0; border-bottom:1px solid var(--line); }
       #fc-modal .fc-tabs button { flex:1; padding:9px 4px; border:none; background:transparent; color:var(--muted);
         font-size:13px; cursor:pointer; border-bottom:2px solid transparent; border-radius:6px 6px 0 0; }
@@ -1302,6 +1444,20 @@
       panelBackdrop.classList.add('open');
     }
   }
+  // Recalcula el modo efectivo y re-aplica el layout sin cerrar paneles (lo usa el listener de pantalla).
+  function recomputeDesktop() {
+    DESKTOP_MODE = effectiveDesktop();
+    document.documentElement.classList.toggle('fc-desktop', DESKTOP_MODE);
+    const panelOpen =
+      (historyPanel && historyPanel.classList.contains('open')) ||
+      (listPanel && listPanel.classList.contains('open'));
+    if (panelOpen) {
+      uiBlocked = !DESKTOP_MODE;
+      document.documentElement.classList.toggle('fc-push', DESKTOP_MODE);
+      overlay.classList.toggle('panel-push', DESKTOP_MODE);
+      panelBackdrop.classList.toggle('open', !DESKTOP_MODE);
+    }
+  }
 
   function renderHistory() {
     const body = historyPanel._body;
@@ -1460,6 +1616,7 @@
       // secuencial: más suave con el servidor que disparar N a la vez
       if (await listAction('remove_sentence_from_list', row.dataset.sid)) {
         ok++;
+        cacheRemove(LIST_ID, row.dataset.sid);
         row.remove();
       }
     }
@@ -1479,6 +1636,8 @@
     const so = (v, t) =>
       `<option value="${v}" ${listSort === v ? 'selected' : ''}>${t}</option>`;
     const sortOpts =
+      so('-added', 'Agregadas: recientes primero') +
+      so('added', 'Agregadas: viejas primero') +
       so('-created', 'Creación: nuevas primero') +
       so('created', 'Creación: viejas primero') +
       so('-modified', 'Modificación: recientes primero') +
@@ -1550,6 +1709,11 @@
     area.innerHTML =
       '<div class="fc-list-load"><div class="fc-load-dots"><span></span><span></span><span></span></div><div class="lbl">Cargando lista…</div></div>';
     body.appendChild(area);
+    // Orden "agregadas": la API no lo soporta -> se resuelve LOCAL desde el caché (instantáneo, offline).
+    if (listSort === '-added' || listSort === 'added') {
+      renderAddedFromCache(area);
+      return;
+    }
     try {
       const url =
         listUrls[listPage] || `${API_BASE}/sentences?${buildListQuery()}`;
@@ -1565,6 +1729,20 @@
     } catch (e) {
       area.textContent = 'Error cargando la lista.';
     }
+  }
+
+  function renderAddedFromCache(area) {
+    // Orden por fecha de agregado (lo que registramos nosotros). Reusa buildListRow
+    // porque cada entrada tiene la forma de un objeto de la API.
+    const byId = loadListCache()[LIST_ID] || {};
+    const entries = Object.values(byId).sort((a, b) =>
+      listSort === '-added'
+        ? (b.ts || 0) - (a.ts || 0)
+        : (a.ts || 0) - (b.ts || 0),
+    );
+    listTotal = entries.length;
+    applyListTitle();
+    renderListPage(area, entries, false); // sin paginación de red: todo local (tope 500)
   }
 
   function buildListRow(c) {
@@ -1591,8 +1769,10 @@
         window.open(`/${langSeg()}/sentences/show/${c.id}`, '_blank'),
       );
     row.querySelector('.rm').addEventListener('click', async () => {
-      if (await listById('remove_sentence_from_list', c.id, 'quitada'))
+      if (await listById('remove_sentence_from_list', c.id, 'quitada')) {
+        cacheRemove(LIST_ID, c.id);
         listRemoveRow(c.id);
+      }
     });
     row.querySelector('.sel').addEventListener('change', () => {
       const a = listArea(),
@@ -1789,11 +1969,22 @@
       // 'desktop' NO va en el perfil (es local, no se sincroniza) -> se maneja con applyDesktopPref
     };
   }
-  // Modo ordenador: preferencia LOCAL por dispositivo, fuera del perfil y del sync.
+  // Modo ordenador: el toggle "Auto" es GLOBAL + sincronizado; el modo MANUAL es local por dispositivo.
   function applyDesktopPref(m, persist) {
-    DESKTOP_MODE = m.querySelector('#f-desktop').checked;
+    const autoEl = m.querySelector('#f-desktop-auto');
+    const manualEl = m.querySelector('#f-desktop');
+    DESKTOP_AUTO = autoEl ? autoEl.checked : DESKTOP_AUTO;
+    DESKTOP_MODE = DESKTOP_AUTO ? detectDesktop() : !!(manualEl && manualEl.checked);
     document.documentElement.classList.toggle('fc-desktop', DESKTOP_MODE);
-    if (persist) LS.set('sm-fc-desktop', DESKTOP_MODE ? '1' : '0'); // local (no en SYNC_KEYS). Solo Guardar persiste -> Cancelar puede revertir.
+    if (manualEl) {
+      manualEl.disabled = DESKTOP_AUTO; // en Auto, el manual queda deshabilitado y refleja lo detectado
+      if (DESKTOP_AUTO) manualEl.checked = DESKTOP_MODE;
+    }
+    if (persist) {
+      // Solo Guardar persiste -> Cancelar puede revertir.
+      LS.set('sm-fc-desktop-auto', DESKTOP_AUTO ? '1' : '0'); // GLOBAL + sync (está en SYNC_KEYS)
+      if (!DESKTOP_AUTO) LS.set('sm-fc-desktop', DESKTOP_MODE ? '1' : '0'); // manual: LOCAL; no lo pisamos cuando Auto está ON
+    }
   }
   // Lee gestos + atajos del modal y los aplica en vivo. Solo persiste (+ sincroniza) si persist=true.
   function applyControls(m, persist) {
@@ -1858,7 +2049,12 @@
     setV('#d-back', DISPLAY.back);
     setV('#f-audiolang', AUDIO_LANG);
     setC('#f-startrev', START_REVEALED);
+    setC('#f-desktop-auto', DESKTOP_AUTO);
     setC('#f-desktop', DESKTOP_MODE);
+    const mdEl = g('#f-desktop');
+    if (mdEl) mdEl.disabled = DESKTOP_AUTO;
+    const subEl = g('#f-desktop-sub');
+    if (subEl) subEl.classList.toggle('dim', DESKTOP_AUTO);
     populateListSelect(); // re-puebla "Lista objetivo" y selecciona el LIST_ID actual
     ['up', 'down', 'left', 'right'].forEach((d) =>
       setV('#g-' + d, GESTURES[d]),
@@ -2108,8 +2304,12 @@
       <div class="row"><input type="checkbox" id="f-startrev" ${START_REVEALED ? 'checked' : ''}><span>Mostrar las cartas ya reveladas al navegar</span></div>
       <div class="hint">Por defecto aparecen ocultas (tocás para revelar). Activá esto para verlas reveladas de entrada.</div>
       <h4>Interacción</h4>
-      <div class="row"><input type="checkbox" id="f-desktop" ${DESKTOP_MODE ? 'checked' : ''}><span>Modo ordenador (paneles laterales)</span></div>
-      <div class="hint">En PC: Historial y Mi lista se abren al costado y empujan el contenido en vez de flotar. Atajos: <b>[</b> alterna Mi lista, <b>]</b> alterna Historial.</div>
+      <div class="row"><input type="checkbox" id="f-desktop-auto" ${DESKTOP_AUTO ? 'checked' : ''}><span>Auto: detectar pantalla</span></div>
+      <div class="hint">Si está activo, el modo se elige solo: pantalla chica/móvil → flotante, pantalla grande → ordenador. Este toggle es <b>global</b> (todos los perfiles) y se sincroniza.</div>
+      <div class="fc-sub${DESKTOP_AUTO ? ' dim' : ''}" id="f-desktop-sub">
+        <div class="row"><input type="checkbox" id="f-desktop" ${DESKTOP_MODE ? 'checked' : ''} ${DESKTOP_AUTO ? 'disabled' : ''}><span>Modo ordenador (paneles laterales)</span></div>
+        <div class="hint">Selección manual (cuando Auto está apagado). Es <b>local</b> por dispositivo, no se sincroniza. En PC: Historial y Mi lista empujan el contenido. Atajos: <b>[</b> alterna Mi lista, <b>]</b> alterna Historial.</div>
+      </div>
       </div>
       <div class="fc-pane" data-pane="c">
       <h4>Gestos (deslizar, mobile)</h4>
@@ -2332,11 +2532,24 @@
           return;
         }
         await gistPush();
+        await gistPullCache(); // mezclá los "agregados" remotos...
+        await gistPushCacheAll(); // ...y subí el merge (un archivo por lista)
         toast('Sincronizado ✓', true);
       } catch (e) {
         toast('Error de sync: ' + e.message, false);
       }
     });
+    // Auto ON -> el modo manual queda deshabilitado (UI en vivo; el efecto real se aplica con Aplicar/Guardar).
+    {
+      const da = m.querySelector('#f-desktop-auto'),
+        md = m.querySelector('#f-desktop'),
+        sub = m.querySelector('#f-desktop-sub');
+      if (da && md)
+        da.addEventListener('change', () => {
+          md.disabled = da.checked;
+          if (sub) sub.classList.toggle('dim', da.checked);
+        });
+    }
     m.querySelectorAll('.fc-tabs button').forEach((b) =>
       b.addEventListener('click', () => {
         m.querySelectorAll('.fc-tabs button').forEach((x) =>
@@ -2394,7 +2607,8 @@
     KEYS = loadObj('sm-fc-keys', KEYS_DEFAULT); // atajos guardados
     GESTURES = loadObj('sm-fc-gestures', GESTURES_DEFAULT); // gestos guardados
     rebuildKeymap();
-    DESKTOP_MODE = LS.get('sm-fc-desktop') === '1'; // modo ordenador guardado
+    DESKTOP_AUTO = LS.get('sm-fc-desktop-auto') !== '0'; // toggle Auto guardado
+    DESKTOP_MODE = effectiveDesktop(); // modo efectivo (auto-detectado o manual guardado)
     document.documentElement.classList.toggle('fc-desktop', DESKTOP_MODE);
     dirty = false;
     closePanels();
@@ -2582,6 +2796,10 @@
   buildUI();
   setOpen(isOpen());
   resetDeck();
+  // Modo "Auto": re-aplicar el modo al cambiar el tamaño/orientación de pantalla.
+  smallScreenMQ.addEventListener('change', () => {
+    if (DESKTOP_AUTO) recomputeDesktop();
+  });
   // Auto-sync: al arrancar, bajá del gist y si hay algo más nuevo, recargá con la config remota.
   if (ghToken())
     gistPull()
@@ -2589,7 +2807,9 @@
         if (changed) {
           toast('Config remota más nueva — recargando…', true);
           setTimeout(() => location.reload(), 700);
+          return;
         }
+        return gistPullCache(); // sin recarga: traé/mezclá el caché de "agregadas recientemente"
       })
       .catch(() => {});
 })();
