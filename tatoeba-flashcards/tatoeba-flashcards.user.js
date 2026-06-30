@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tatoeba - Flashcards (Sentence Mining)
 // @namespace    https://tatoeba.org/
-// @version      5.16
+// @version      5.17
 // @description  Flashcards tipo Anki sobre la búsqueda filtrada de Tatoeba (mobile + teclado)
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=tatoeba.org
 // @match        https://tatoeba.org/*/sentences/search*
@@ -17,7 +17,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '5.16';
+  const SCRIPT_VERSION = '5.17';
 
   /* ============ STORAGE (backend local: GM_setValue, con fallback a localStorage) ============ */
   // Acá NO hay sync entre dispositivos: esto es solo el guardado LOCAL. El sync cruzado lo hace el Gist (más abajo).
@@ -1034,6 +1034,7 @@
       if (ok) {
         cacheAdd(LIST_ID, c); // solo si el agregado OFICIAL fue OK -> nunca divergen
         syncListAdd(c);
+        next(); // al terminar el loader, avanzá a la siguiente oración
       }
     });
   };
