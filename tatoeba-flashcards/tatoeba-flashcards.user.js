@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tatoeba - Flashcards (Sentence Mining)
 // @namespace    https://tatoeba.org/
-// @version      5.20
+// @version      5.21
 // @description  Flashcards tipo Anki sobre la búsqueda filtrada de Tatoeba (mobile + teclado)
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=tatoeba.org
 // @match        https://tatoeba.org/*/sentences/search*
@@ -17,7 +17,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '5.20';
+  const SCRIPT_VERSION = '5.21';
 
   /* ============ STORAGE (backend local: GM_setValue, con fallback a localStorage) ============ */
   // Acá NO hay sync entre dispositivos: esto es solo el guardado LOCAL. El sync cruzado lo hace el Gist (más abajo).
@@ -493,10 +493,10 @@
     const over = rows.some((r) => r.bytes >= ONE_MB);
     box.innerHTML =
       rows
-        .map(
-          (r) =>
-            `<div class="fc-store-row"><span class="lbl">${escHtml(r.name)}</span><span class="fc-dot ${sizeClass(r.bytes)}"></span><b>${fmtSize(r.bytes)}</b></div>`,
-        )
+        .map((r) => {
+          const pct = Math.min(100, (r.bytes / ONE_MB) * 100); // tope visual: 1 MB
+          return `<div class="fc-store-row"><div class="fc-store-head"><span class="lbl">${escHtml(r.name)}</span><b>${fmtSize(r.bytes)}</b></div><div class="fc-store-bar"><i class="${sizeClass(r.bytes)}" style="width:${pct.toFixed(1)}%"></i></div></div>`;
+        })
         .join('') +
       (over
         ? `<div class="fc-store-warn">⚠️ Un archivo superó 1 MB: GitHub lo trunca y el sync de ese archivo deja de funcionar. Borrá entradas viejas de la lista o bajá los días de "vistas".</div>`
@@ -1101,8 +1101,8 @@
         justify-content:safe center; text-align:center; padding:22px; gap:18px; overflow:hidden;
         font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
       #fc-front { font-size:31px; line-height:1.45; font-weight:700; letter-spacing:.2px; }
-      #fc-front.fc-enter { animation:fc-cardIn .26s cubic-bezier(.2,.8,.3,1) both; } /* al cambiar de oración */
-      @keyframes fc-cardIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+      #fc-front.fc-enter { animation:fc-cardIn .45s cubic-bezier(.2,.8,.3,1) both; } /* al cambiar de oración (lenta para que se note) */
+      @keyframes fc-cardIn { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
       #fc-back { font-size:24px; line-height:1.5; font-weight:500; color:var(--back); border-top:1px solid rgba(128,128,128,.35); padding-top:16px; }
       #fc-back.fc-reveal, #fc-owners.fc-reveal { animation:fc-revealIn .26s cubic-bezier(.2,.7,.3,1) both; }
       #fc-owners.fc-reveal { animation-delay:.07s; }
@@ -1238,13 +1238,15 @@
       #fc-modal .fc-restore:hover { color:var(--fg); border-color:var(--accent); }
       #fc-modal .fc-sub { margin-left:14px; padding-left:12px; border-left:2px solid var(--line); display:flex; flex-direction:column; gap:6px; transition:opacity .2s ease; }
       #fc-modal .fc-sub.dim { opacity:.4; } /* Auto ON -> el manual queda inactivo */
-      #fc-storage .fc-store-row { display:flex; align-items:center; gap:8px; font-size:13px; padding:3px 0; }
-      #fc-storage .fc-store-row .lbl { flex:1; color:var(--muted); }
-      #fc-storage .fc-store-row b { font-variant-numeric:tabular-nums; }
-      #fc-storage .fc-dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto; }
-      #fc-storage .fc-dot.green { background:#3fa34d; }
-      #fc-storage .fc-dot.yellow { background:#e0a000; }
-      #fc-storage .fc-dot.red { background:#d33; }
+      #fc-storage .fc-store-row { padding:5px 0; }
+      #fc-storage .fc-store-head { display:flex; align-items:baseline; gap:8px; font-size:13px; }
+      #fc-storage .fc-store-head .lbl { flex:1; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      #fc-storage .fc-store-head b { font-variant-numeric:tabular-nums; }
+      #fc-storage .fc-store-bar { height:4px; border-radius:3px; background:var(--line); overflow:hidden; margin-top:4px; }
+      #fc-storage .fc-store-bar i { display:block; height:100%; border-radius:3px; transition:width .3s ease; }
+      #fc-storage .fc-store-bar i.green { background:#3fa34d; }
+      #fc-storage .fc-store-bar i.yellow { background:#e0a000; }
+      #fc-storage .fc-store-bar i.red { background:#d33; }
       #fc-storage .fc-store-warn { margin-top:8px; padding:8px 10px; border-radius:6px; background:rgba(221,51,51,.14); color:#e57373; font-size:12px; line-height:1.4; }
       #fc-modal .fc-tabs { display:flex; gap:2px; padding:8px 8px 0; border-bottom:1px solid var(--line); }
       #fc-modal .fc-tabs button { flex:1; padding:9px 4px; border:none; background:transparent; color:var(--muted);
